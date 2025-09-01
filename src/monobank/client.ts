@@ -1,6 +1,7 @@
 import { MONOBANK_API_TOKEN, MONOBANK_API_URL } from "./config";
 import {
   CURRENCY_CODES_TO_SYMBOLS,
+  CURRENCY_SYMBOLS_TO_CODES,
   MAX_TRANSACTIONS_PER_REQUEST,
 } from "./const";
 import type {
@@ -11,7 +12,11 @@ import type {
   Transaction,
 } from "./types";
 
-class MonobankClient {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export class MonobankClient {
   private readonly MONOBANK_API_TOKEN: string;
   private readonly MONOBANK_API_URL: string = MONOBANK_API_URL;
 
@@ -31,7 +36,7 @@ class MonobankClient {
     return `${this.MONOBANK_API_URL}/personal/statement/${accountId}/${from}/${to}`;
   }
 
-  public async getAccounts() {
+  public async getAccountsWithForeignCurrencies() {
     try {
       const response = await fetch(`${this.accountsUrl}`, {
         method: "GET",
@@ -45,9 +50,11 @@ class MonobankClient {
         );
       }
 
-      console.log(`Fetched persoanl info... clientId ${data.clientId}`);
+      console.log(`Fetched personal info... clientId ${data.clientId}`);
 
-      return data.accounts;
+      return data.accounts.filter(
+        (account) => account.currencyCode !== CURRENCY_SYMBOLS_TO_CODES.UAH
+      );
     } catch (error) {
       console.error("error", error);
     }
@@ -64,118 +71,121 @@ class MonobankClient {
 
     return fopAccounts;
   }
-
-  private getFopAccountByCurrencyCode(
-    accounts: Account[],
-    currencyCode: CurrencyCode
-  ) {
-    const fopAccounts = this.getFopAccounts(accounts);
-    const fopAccount = fopAccounts.find(
-      (account) => account.currencyCode === currencyCode
-    );
-    if (!fopAccount) {
-      throw new Error(`No FOP account found for currency code ${currencyCode}`);
-    }
-    return fopAccount;
-  }
-
   private async fetchTransactions(
     accountId: string,
     from: number,
     to: number
-  ): Promise<Transaction[]> {
+  ): Promise<Transaction[] | undefined> {
     const url = this.buildTransactionsUrl(accountId, from, to);
-    const res = await fetch(url, {
-      headers: { "X-Token": this.MONOBANK_API_TOKEN },
-    });
 
-    const data = (await res.json()) as Transaction[];
+    try {
+      const res = await fetch(url, {
+        headers: { "X-Token": this.MONOBANK_API_TOKEN },
+      });
 
-    console.log(
-      `Fetching transactions for period ${new Date(
-        from * 1000
-      ).toLocaleDateString()} to ${new Date(to * 1000).toLocaleDateString()}`
-    );
+      const data = await res.json();
 
-    if (!res.ok) {
-      throw new Error(`Monobank API error: ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        throw new Error(
+          `Monobank API error: ${res.status} ${
+            res.statusText
+          } — ${JSON.stringify(data)}`
+        );
+      }
+
+      if (!Array.isArray(data)) {
+        console.error("Unexpected response from Monobank:", data);
+        return [];
+      }
+
+      console.log(
+        `Fetched ${data.length} transactions for ${new Date(
+          from * 1000
+        ).toLocaleDateString()} - ${new Date(to * 1000).toLocaleDateString()}`
+      );
+
+      console.log(
+        "⏳ Waiting couple of seconds to respect Monobank API rate limit..."
+      );
+      await sleep(3000);
+
+      return data as Transaction[];
+    } catch (error) {
+      console.error("error", error);
+      return [];
     }
-
-    return data;
   }
 
-  private calculateIncome(transactions: Transaction[]) {
-    const onlyIncomeTxns = transactions.filter(
-      (txn) => txn.operationAmount > 0
+  public async getIncomeByPeriod(accounts: Account[], monthsBack: number) {
+    const fopAccounts = this.getFopAccounts(accounts);
+
+    const accountsToUse = fopAccounts.filter(
+      (account) => account.currencyCode !== CURRENCY_SYMBOLS_TO_CODES.UAH
     );
 
-    const income = onlyIncomeTxns.reduce((acc, txn) => {
-      return acc + txn.operationAmount;
-    }, 0);
-
-    const normalizedIncome = income / 100;
-
-    console.log("Calculated income: ", normalizedIncome);
-
-    return normalizedIncome;
-  }
-
-  public async getIncomeByPeriod(
-    accounts: Account[],
-    currencyCode: CurrencyCode,
-    monthsBack: number
-  ) {
-    const fopAccount = this.getFopAccountByCurrencyCode(accounts, currencyCode);
-    const accountId = fopAccount.id;
+    let allTransactions: Transaction[] = [];
 
     const now = Math.floor(Date.now() / 1000); // seconds
     const fromTime = now - monthsBack * 30 * 24 * 60 * 60; // ~N months
-    let allTransactions: Transaction[] = [];
-    let currentFrom = fromTime;
     const maxRange = 2682000; // 31 day + 1 hour
 
-    while (currentFrom < now) {
-      let currentTo = Math.min(currentFrom + maxRange, now);
+    for (const account of accountsToUse) {
+      console.log(
+        `Fetching transactions for account: ${account.id} with ${
+          CURRENCY_CODES_TO_SYMBOLS[account.currencyCode]
+        }`
+      );
 
-      while (true) {
-        const txns = await this.fetchTransactions(
-          accountId,
-          currentFrom,
-          currentTo
-        );
+      const accountId = account.id;
+      let currentFrom = fromTime;
 
-        allTransactions = [...allTransactions, ...txns];
+      while (currentFrom < now) {
+        let currentTo = Math.min(currentFrom + maxRange, now);
 
-        if (txns.length === MAX_TRANSACTIONS_PER_REQUEST) {
-          // going back to the last transaction — the current one
-          const lastTxn = txns[txns.length - 1];
+        while (true) {
+          const txns = await this.fetchTransactions(
+            accountId,
+            currentFrom,
+            currentTo
+          );
 
-          if (!lastTxn) {
-            throw new Error("No transactions found");
+          if (!txns) {
+            console.log("No transactions found");
+            return;
           }
 
-          const lastTxnTime = lastTxn.time;
-          currentTo = lastTxnTime - 1;
-        } else {
-          break; // less than 500 → all transactions in the range were fetched
+          allTransactions = [...allTransactions, ...txns];
+
+          if (txns.length === MAX_TRANSACTIONS_PER_REQUEST) {
+            // going back to the last transaction — the current one
+            const lastTxn = txns[txns.length - 1];
+
+            if (!lastTxn) {
+              throw new Error("No transactions found");
+            }
+
+            const lastTxnTime = lastTxn.time;
+            currentTo = lastTxnTime - 1;
+          } else {
+            break; // less than 500 → all transactions in the range were fetched
+          }
         }
+
+        // next block
+        currentFrom = currentTo;
       }
-
-      // next block
-      currentFrom = currentTo;
     }
-
-    return this.calculateIncome(allTransactions);
+    return allTransactions
+      .map((txn) => txn.operationAmount)
+      .filter((txn) => txn > 0);
   }
 
-  public async fetchCurrencyRates(
-    amount: number,
+  public async fetchCurrencyRateByCurrencyPair(
     fromCurrency: CurrencyCode,
     toCurrency: CurrencyCode
   ) {
     const response = await fetch(this.currencyUrl, {
       method: "POST",
-      body: JSON.stringify({ amount, fromCurrency, toCurrency }),
     });
 
     if (!response.ok) {
@@ -205,30 +215,4 @@ class MonobankClient {
 
     return currencyRate;
   }
-
-  public async calculateIncomeInTargetCurrency(
-    income: number,
-    fromCurrency: CurrencyCode,
-    toCurrency: CurrencyCode
-  ) {
-    const currencyRate = await this.fetchCurrencyRates(
-      income,
-      fromCurrency,
-      toCurrency
-    );
-
-    const incomeInTargetCurrency = income * currencyRate.rateBuy;
-
-    console.log(
-      `Calculated income in target currency (${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}): ${incomeInTargetCurrency} `
-    );
-
-    return incomeInTargetCurrency;
-  }
 }
-
-if (!MONOBANK_API_TOKEN) {
-  throw new Error("MONOBANK_API_TOKEN is not defined");
-}
-
-export const monobankClient = new MonobankClient(MONOBANK_API_TOKEN);
