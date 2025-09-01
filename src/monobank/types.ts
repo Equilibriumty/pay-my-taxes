@@ -54,3 +54,12 @@ export type Transaction = {
   counterIban?: string;
   counterName: string;
 };
+
+export type Currency = {
+  currencyCodeA: CurrencyCode;
+  currencyCodeB: CurrencyCode;
+  date: number;
+  rateSell: number;
+  rateBuy: number;
+  rateCross: number;
+};

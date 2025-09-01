@@ -1,6 +1,15 @@
 import { MONOBANK_API_TOKEN, MONOBANK_API_URL } from "./config";
-import { MAX_TRANSACTIONS_PER_REQUEST } from "./const";
-import type { Account, CurrencyCode, PersonalInfo, Transaction } from "./types";
+import {
+  CURRENCY_CODES_TO_SYMBOLS,
+  MAX_TRANSACTIONS_PER_REQUEST,
+} from "./const";
+import type {
+  Account,
+  Currency,
+  CurrencyCode,
+  PersonalInfo,
+  Transaction,
+} from "./types";
 
 class MonobankClient {
   private readonly MONOBANK_API_TOKEN: string;
@@ -12,6 +21,10 @@ class MonobankClient {
 
   get accountsUrl() {
     return `${this.MONOBANK_API_URL}/personal/client-info`;
+  }
+
+  get currencyUrl() {
+    return `${this.MONOBANK_API_URL}/bank/currency`;
   }
 
   private buildTransactionsUrl(accountId: string, from: number, to: number) {
@@ -26,6 +39,14 @@ class MonobankClient {
       });
       const data = (await response.json()) as PersonalInfo;
 
+      if (!response.ok) {
+        throw new Error(
+          `Monobank API error: ${response.status} ${response.statusText}`
+        );
+      }
+
+      console.log(`Fetched persoanl info... clientId ${data.clientId}`);
+
       return data.accounts;
     } catch (error) {
       console.error("error", error);
@@ -39,7 +60,8 @@ class MonobankClient {
       throw new Error("No FOP accounts found");
     }
 
-    console.log("Found FOP accounts:", fopAccounts);
+    console.log(`Found ${fopAccounts.length} FOP accounts!`);
+
     return fopAccounts;
   }
 
@@ -69,8 +91,11 @@ class MonobankClient {
 
     const data = (await res.json()) as Transaction[];
 
-    console.log("Fetching transactions from", url);
-    console.log("Response data:", data);
+    console.log(
+      `Fetching transactions for period ${new Date(
+        from * 1000
+      ).toLocaleDateString()} to ${new Date(to * 1000).toLocaleDateString()}`
+    );
 
     if (!res.ok) {
       throw new Error(`Monobank API error: ${res.status} ${res.statusText}`);
@@ -88,9 +113,11 @@ class MonobankClient {
       return acc + txn.operationAmount;
     }, 0);
 
-    console.log("Calculated income: ", income);
+    const normalizedIncome = income / 100;
 
-    return income;
+    console.log("Calculated income: ", normalizedIncome);
+
+    return normalizedIncome;
   }
 
   public async getIncomeByPeriod(
@@ -139,6 +166,64 @@ class MonobankClient {
     }
 
     return this.calculateIncome(allTransactions);
+  }
+
+  public async fetchCurrencyRates(
+    amount: number,
+    fromCurrency: CurrencyCode,
+    toCurrency: CurrencyCode
+  ) {
+    const response = await fetch(this.currencyUrl, {
+      method: "POST",
+      body: JSON.stringify({ amount, fromCurrency, toCurrency }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Monobank API error: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const data = (await response.json()) as Array<Currency>;
+
+    console.log("Fetched currency rates...");
+
+    const currencyRate = data.find(
+      (rate) =>
+        rate.currencyCodeA === fromCurrency && rate.currencyCodeB === toCurrency
+    );
+
+    if (!currencyRate) {
+      throw new Error(
+        `No currency rate found for ${fromCurrency} to ${toCurrency}`
+      );
+    }
+
+    console.log(
+      `Found currency rate for group ${CURRENCY_CODES_TO_SYMBOLS[fromCurrency]} to ${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}: ${currencyRate.rateBuy}`
+    );
+
+    return currencyRate;
+  }
+
+  public async calculateIncomeInTargetCurrency(
+    income: number,
+    fromCurrency: CurrencyCode,
+    toCurrency: CurrencyCode
+  ) {
+    const currencyRate = await this.fetchCurrencyRates(
+      income,
+      fromCurrency,
+      toCurrency
+    );
+
+    const incomeInTargetCurrency = income * currencyRate.rateBuy;
+
+    console.log(
+      `Calculated income in target currency (${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}): ${incomeInTargetCurrency} `
+    );
+
+    return incomeInTargetCurrency;
   }
 }
 
