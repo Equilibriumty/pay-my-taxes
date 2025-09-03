@@ -1,15 +1,17 @@
 import type { MonobankClient } from "../monobank/client";
 import type { Transaction, CurrencyCode } from "../monobank/types";
+import type { RedisClient } from "../redis/client";
 import { CURRENCY_DENOMINATOR } from "./const";
-import type { TaxCalculatorClientConfig } from "./types";
-import type { RedisClient } from "bun";
+import type {
+  IncomeAndTaxesCalculationResult,
+  TaxCalculatorClientConfig,
+} from "./types";
 
 export class TaxCalculatorClient {
   private readonly monobankClient: MonobankClient;
   private readonly taxRates: TaxCalculatorClientConfig;
   private readonly currencyDenominator = CURRENCY_DENOMINATOR;
   private readonly redis: RedisClient;
-  private readonly CACHE_TTL = 1000 * 60 * 60;
 
   constructor(
     monobankClient: MonobankClient,
@@ -29,9 +31,9 @@ export class TaxCalculatorClient {
 
   public async calculateIncomeByPeriod(monthsBack: number) {
     const cacheKey = `taxcalc:incomeByPeriod:${monthsBack}`;
-    const cached = await this.redis.get(cacheKey);
+    const cached = await this.redis.get<number>(cacheKey);
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
     const accounts =
       await this.monobankClient.getAccountsWithForeignCurrencies();
@@ -50,46 +52,24 @@ export class TaxCalculatorClient {
     }
 
     const result = this.calculateIncome(incomes);
-    await this.redis.set(cacheKey, JSON.stringify(result));
-    await this.redis.expire(cacheKey, this.CACHE_TTL);
+    await this.redis.set(cacheKey, result);
     return result;
   }
 
-  public async calculateIncomeInTargetCurrency(
-    normalizedIncome: number,
-    fromCurrency: CurrencyCode,
-    toCurrency: CurrencyCode
-  ) {
-    const rate = await this.monobankClient.fetchCurrencyRateByCurrencyPair(
-      fromCurrency,
-      toCurrency
+  public async calculateTaxesForLastMonths(monthsBack: number) {
+    const cacheKey = `taxcalc:taxesForLastMonths:${monthsBack}`;
+    const cached = await this.redis.get<IncomeAndTaxesCalculationResult>(
+      cacheKey
     );
-    return normalizedIncome * rate.rateBuy;
-  }
-
-  public async calculateTaxesForLastMonths(
-    fromCurrencyCode: CurrencyCode,
-    targetCurrencyCode: CurrencyCode,
-    monthsBack: number
-  ) {
-    const cacheKey = `taxcalc:taxesForLastMonths:${fromCurrencyCode}:${targetCurrencyCode}:${monthsBack}`;
-    const cached = await this.redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
     const incomeInFromCurrency = await this.calculateIncomeByPeriod(monthsBack);
 
-    const convertedIncome = await this.calculateIncomeInTargetCurrency(
-      incomeInFromCurrency,
-      fromCurrencyCode,
-      targetCurrencyCode
-    );
+    const taxes = this.calculateTaxes(incomeInFromCurrency);
 
-    const taxes = this.calculateTaxes(convertedIncome);
-
-    const result = { income: convertedIncome, taxes };
-    await this.redis.set(cacheKey, JSON.stringify(result));
-    await this.redis.expire(cacheKey, this.CACHE_TTL);
+    const result = { income: incomeInFromCurrency, taxes };
+    await this.redis.set(cacheKey, result);
     return result;
   }
 

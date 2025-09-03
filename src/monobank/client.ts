@@ -1,3 +1,4 @@
+import type { RedisClient } from "../redis/client";
 import { MONOBANK_API_TOKEN, MONOBANK_API_URL } from "./config";
 import {
   CURRENCY_CODES_TO_SYMBOLS,
@@ -11,7 +12,6 @@ import type {
   PersonalInfo,
   Transaction,
 } from "./types";
-import type { RedisClient } from "bun";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,7 +21,6 @@ export class MonobankClient {
   private readonly MONOBANK_API_TOKEN: string;
   private readonly MONOBANK_API_URL: string = MONOBANK_API_URL;
   private readonly redis: RedisClient;
-  private readonly CACHE_TTL = 1000 * 60 * 60;
 
   constructor(MONOBANK_API_TOKEN: string, redis: RedisClient) {
     this.MONOBANK_API_TOKEN = MONOBANK_API_TOKEN;
@@ -42,9 +41,9 @@ export class MonobankClient {
 
   public async getAccountsWithForeignCurrencies() {
     const cacheKey = `accountsWithForeignCurrencies`;
-    const cached = await this.redis.get(cacheKey);
+    const cached = await this.redis.get<Account[]>(cacheKey);
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
     try {
       const response = await fetch(`${this.accountsUrl}`, {
@@ -64,8 +63,7 @@ export class MonobankClient {
       const result = data.accounts.filter(
         (account) => account.currencyCode !== CURRENCY_SYMBOLS_TO_CODES.UAH
       );
-      await this.redis.set(cacheKey, JSON.stringify(result));
-      await this.redis.expire(cacheKey, this.CACHE_TTL);
+      await this.redis.set(cacheKey, result);
       return result;
     } catch (error) {
       console.error("error", error);
@@ -89,9 +87,9 @@ export class MonobankClient {
     to: number
   ): Promise<Transaction[] | undefined> {
     const cacheKey = `transactions:${accountId}:${from}:${to}`;
-    const cached = await this.redis.get(cacheKey);
+    const cached = await this.redis.get<Transaction[]>(cacheKey);
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
     const url = this.buildTransactionsUrl(accountId, from, to);
 
@@ -112,8 +110,7 @@ export class MonobankClient {
 
       if (!Array.isArray(data)) {
         console.error("Unexpected response from Monobank:", data);
-        await this.redis.set(cacheKey, JSON.stringify([]));
-        await this.redis.expire(cacheKey, this.CACHE_TTL);
+        await this.redis.set(cacheKey, []);
         return [];
       }
 
@@ -128,8 +125,7 @@ export class MonobankClient {
       );
       await sleep(60_000);
 
-      await this.redis.set(cacheKey, JSON.stringify(data));
-      await this.redis.expire(cacheKey, this.CACHE_TTL);
+      await this.redis.set(cacheKey, data);
       return data as Transaction[];
     } catch (error) {
       console.error("error", error);
@@ -144,8 +140,7 @@ export class MonobankClient {
       (account) => account.currencyCode !== CURRENCY_SYMBOLS_TO_CODES.UAH
     );
 
-    let allTransactions: Transaction[] = [];
-
+    let allIncomes: number[] = [];
     // Use the start of the current day (midnight UTC) for 'now' to improve cache effectiveness
     const now = Math.floor(Date.now() / 1000);
     const dayStart = now - (now % (24 * 60 * 60)); // midnight UTC today
@@ -162,6 +157,11 @@ export class MonobankClient {
       const accountId = account.id;
       let currentFrom = fromTime;
 
+      const currencyRate = await this.fetchCurrencyRateByCurrencyPair(
+        account.currencyCode,
+        CURRENCY_SYMBOLS_TO_CODES.UAH
+      );
+
       while (currentFrom < now) {
         let currentTo = Math.min(currentFrom + maxRange, now);
 
@@ -177,7 +177,11 @@ export class MonobankClient {
             return;
           }
 
-          allTransactions = [...allTransactions, ...txns];
+          const transactionsInUAH = txns
+            .filter((txns) => txns.operationAmount > 0)
+            .map((txns) => txns.operationAmount * currencyRate.rateBuy);
+
+          allIncomes = [...allIncomes, ...transactionsInUAH];
 
           if (txns.length === MAX_TRANSACTIONS_PER_REQUEST) {
             // going back to the last transaction — the current one
@@ -198,9 +202,7 @@ export class MonobankClient {
         currentFrom = currentTo;
       }
     }
-    return allTransactions
-      .map((txn) => txn.operationAmount)
-      .filter((txn) => txn > 0);
+    return allIncomes;
   }
 
   public async fetchCurrencyRateByCurrencyPair(
@@ -208,10 +210,12 @@ export class MonobankClient {
     toCurrency: CurrencyCode
   ) {
     const cacheKey = `currencyRate:${fromCurrency}:${toCurrency}`;
-    const cached = await this.redis.get(cacheKey);
+    const cached = await this.redis.get<Currency>(cacheKey);
+
     if (cached) {
-      return JSON.parse(cached);
+      return cached;
     }
+
     const response = await fetch(this.currencyUrl, {
       method: "POST",
     });
@@ -238,16 +242,10 @@ export class MonobankClient {
     }
 
     console.log(
-      `Found currency rate for group ${CURRENCY_CODES_TO_SYMBOLS[fromCurrency]} to ${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}: ${currencyRate.rateBuy}`
+      `Found currency rate for pair ${CURRENCY_CODES_TO_SYMBOLS[fromCurrency]} to ${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}: ${currencyRate.rateBuy}`
     );
 
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(currencyRate),
-      "EX",
-      this.CACHE_TTL
-    );
-    await this.redis.expire(cacheKey, this.CACHE_TTL);
+    await this.redis.set(cacheKey, currencyRate);
     return currencyRate;
   }
 }
