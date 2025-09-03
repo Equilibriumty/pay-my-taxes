@@ -6,7 +6,7 @@ import {
 } from "./monobank/const";
 import { TaxCalculatorClient } from "./tax-calculator/client";
 import type { TaxCalculatorClientConfig } from "./tax-calculator/types";
-
+import { RedisClient } from "bun";
 const FROM_CURRENCY = CURRENCY_SYMBOLS_TO_CODES.EUR;
 const TARGET_CURRENCY = CURRENCY_SYMBOLS_TO_CODES.UAH;
 
@@ -19,11 +19,21 @@ if (!MONOBANK_API_TOKEN) {
   throw new Error("MONOBANK_API_TOKEN is not defined");
 }
 
-const monobankClient = new MonobankClient(MONOBANK_API_TOKEN);
+const redisClient = new RedisClient();
 
-const taxCalculatorClient = new TaxCalculatorClient(monobankClient, TAX_RATES);
+redisClient.onconnect = () => {
+  console.log("Redis connected");
+};
+
+const monobankClient = new MonobankClient(MONOBANK_API_TOKEN, redisClient);
+const taxCalculatorClient = new TaxCalculatorClient(
+  monobankClient,
+  TAX_RATES,
+  redisClient
+);
 
 async function main() {
+  await redisClient.connect();
   const { income, taxes } =
     await taxCalculatorClient.calculateTaxesForLastMonths(
       FROM_CURRENCY,
@@ -43,6 +53,7 @@ async function main() {
     }
     `
   );
+  redisClient.close();
 }
 
 main();

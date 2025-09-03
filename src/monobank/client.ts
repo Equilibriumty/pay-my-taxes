@@ -11,6 +11,7 @@ import type {
   PersonalInfo,
   Transaction,
 } from "./types";
+import type { RedisClient } from "bun";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,9 +20,12 @@ function sleep(ms: number) {
 export class MonobankClient {
   private readonly MONOBANK_API_TOKEN: string;
   private readonly MONOBANK_API_URL: string = MONOBANK_API_URL;
+  private readonly redis: RedisClient;
+  private readonly CACHE_TTL = 1000 * 60 * 60;
 
-  constructor(MONOBANK_API_TOKEN: string) {
+  constructor(MONOBANK_API_TOKEN: string, redis: RedisClient) {
     this.MONOBANK_API_TOKEN = MONOBANK_API_TOKEN;
+    this.redis = redis;
   }
 
   get accountsUrl() {
@@ -37,6 +41,11 @@ export class MonobankClient {
   }
 
   public async getAccountsWithForeignCurrencies() {
+    const cacheKey = `accountsWithForeignCurrencies`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
     try {
       const response = await fetch(`${this.accountsUrl}`, {
         method: "GET",
@@ -52,9 +61,12 @@ export class MonobankClient {
 
       console.log(`Fetched personal info... clientId ${data.clientId}`);
 
-      return data.accounts.filter(
+      const result = data.accounts.filter(
         (account) => account.currencyCode !== CURRENCY_SYMBOLS_TO_CODES.UAH
       );
+      await this.redis.set(cacheKey, JSON.stringify(result));
+      await this.redis.expire(cacheKey, this.CACHE_TTL);
+      return result;
     } catch (error) {
       console.error("error", error);
     }
@@ -76,6 +88,11 @@ export class MonobankClient {
     from: number,
     to: number
   ): Promise<Transaction[] | undefined> {
+    const cacheKey = `transactions:${accountId}:${from}:${to}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
     const url = this.buildTransactionsUrl(accountId, from, to);
 
     try {
@@ -95,6 +112,8 @@ export class MonobankClient {
 
       if (!Array.isArray(data)) {
         console.error("Unexpected response from Monobank:", data);
+        await this.redis.set(cacheKey, JSON.stringify([]));
+        await this.redis.expire(cacheKey, this.CACHE_TTL);
         return [];
       }
 
@@ -107,8 +126,10 @@ export class MonobankClient {
       console.log(
         "⏳ Waiting couple of seconds to respect Monobank API rate limit..."
       );
-      await sleep(3000);
+      await sleep(60_000);
 
+      await this.redis.set(cacheKey, JSON.stringify(data));
+      await this.redis.expire(cacheKey, this.CACHE_TTL);
       return data as Transaction[];
     } catch (error) {
       console.error("error", error);
@@ -125,8 +146,10 @@ export class MonobankClient {
 
     let allTransactions: Transaction[] = [];
 
-    const now = Math.floor(Date.now() / 1000); // seconds
-    const fromTime = now - monthsBack * 30 * 24 * 60 * 60; // ~N months
+    // Use the start of the current day (midnight UTC) for 'now' to improve cache effectiveness
+    const now = Math.floor(Date.now() / 1000);
+    const dayStart = now - (now % (24 * 60 * 60)); // midnight UTC today
+    const fromTime = dayStart - monthsBack * 30 * 24 * 60 * 60; // ~N months, aligned to day start
     const maxRange = 2682000; // 31 day + 1 hour
 
     for (const account of accountsToUse) {
@@ -184,6 +207,11 @@ export class MonobankClient {
     fromCurrency: CurrencyCode,
     toCurrency: CurrencyCode
   ) {
+    const cacheKey = `currencyRate:${fromCurrency}:${toCurrency}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
     const response = await fetch(this.currencyUrl, {
       method: "POST",
     });
@@ -213,6 +241,13 @@ export class MonobankClient {
       `Found currency rate for group ${CURRENCY_CODES_TO_SYMBOLS[fromCurrency]} to ${CURRENCY_CODES_TO_SYMBOLS[toCurrency]}: ${currencyRate.rateBuy}`
     );
 
+    await this.redis.set(
+      cacheKey,
+      JSON.stringify(currencyRate),
+      "EX",
+      this.CACHE_TTL
+    );
+    await this.redis.expire(cacheKey, this.CACHE_TTL);
     return currencyRate;
   }
 }

@@ -2,18 +2,23 @@ import type { MonobankClient } from "../monobank/client";
 import type { Transaction, CurrencyCode } from "../monobank/types";
 import { CURRENCY_DENOMINATOR } from "./const";
 import type { TaxCalculatorClientConfig } from "./types";
+import type { RedisClient } from "bun";
 
 export class TaxCalculatorClient {
   private readonly monobankClient: MonobankClient;
   private readonly taxRates: TaxCalculatorClientConfig;
   private readonly currencyDenominator = CURRENCY_DENOMINATOR;
+  private readonly redis: RedisClient;
+  private readonly CACHE_TTL = 1000 * 60 * 60;
 
   constructor(
     monobankClient: MonobankClient,
-    taxRates: TaxCalculatorClientConfig
+    taxRates: TaxCalculatorClientConfig,
+    redis: RedisClient
   ) {
     this.monobankClient = monobankClient;
     this.taxRates = taxRates;
+    this.redis = redis;
   }
 
   private calculateIncome(incomes: number[]) {
@@ -23,6 +28,11 @@ export class TaxCalculatorClient {
   }
 
   public async calculateIncomeByPeriod(monthsBack: number) {
+    const cacheKey = `taxcalc:incomeByPeriod:${monthsBack}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
     const accounts =
       await this.monobankClient.getAccountsWithForeignCurrencies();
 
@@ -39,7 +49,10 @@ export class TaxCalculatorClient {
       throw new Error("Income not found");
     }
 
-    return this.calculateIncome(incomes);
+    const result = this.calculateIncome(incomes);
+    await this.redis.set(cacheKey, JSON.stringify(result));
+    await this.redis.expire(cacheKey, this.CACHE_TTL);
+    return result;
   }
 
   public async calculateIncomeInTargetCurrency(
@@ -59,6 +72,11 @@ export class TaxCalculatorClient {
     targetCurrencyCode: CurrencyCode,
     monthsBack: number
   ) {
+    const cacheKey = `taxcalc:taxesForLastMonths:${fromCurrencyCode}:${targetCurrencyCode}:${monthsBack}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
     const incomeInFromCurrency = await this.calculateIncomeByPeriod(monthsBack);
 
     const convertedIncome = await this.calculateIncomeInTargetCurrency(
@@ -69,7 +87,10 @@ export class TaxCalculatorClient {
 
     const taxes = this.calculateTaxes(convertedIncome);
 
-    return { income: convertedIncome, taxes };
+    const result = { income: convertedIncome, taxes };
+    await this.redis.set(cacheKey, JSON.stringify(result));
+    await this.redis.expire(cacheKey, this.CACHE_TTL);
+    return result;
   }
 
   public calculateTaxes(income: number) {

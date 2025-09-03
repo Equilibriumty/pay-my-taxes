@@ -20,3 +20,10 @@ bun run src/main.ts
 ```
 
 This project was created using `bun init` in bun v1.2.21. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+
+
+## TODO
+
+- [X] Add caching via Redis
+- [] Refactor Redis into its own service
+- [] Add ability to create invoices to pay the taxes
