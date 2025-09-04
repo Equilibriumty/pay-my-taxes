@@ -1,10 +1,11 @@
-import type { RedisClient } from "../redis/client";
-import { MONOBANK_API_TOKEN, MONOBANK_API_URL } from "./config";
+import type { Period } from "../../shared/types";
+import { BankClient } from "../client";
 import {
   CURRENCY_CODES_TO_SYMBOLS,
   CURRENCY_SYMBOLS_TO_CODES,
   MAX_TRANSACTIONS_PER_REQUEST,
 } from "./const";
+import { sleep } from "../../utils/sleep";
 import type {
   Account,
   Currency,
@@ -12,31 +13,28 @@ import type {
   PersonalInfo,
   Transaction,
 } from "./types";
+import { MONOBANK_API_TOKEN, MONOBANK_API_URL } from "./config";
+import { redisClient, RedisClient } from "../../redis/client";
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export class MonobankClient {
-  private readonly MONOBANK_API_TOKEN: string;
-  private readonly MONOBANK_API_URL: string = MONOBANK_API_URL;
-  private readonly redis: RedisClient;
-
-  constructor(MONOBANK_API_TOKEN: string, redis: RedisClient) {
-    this.MONOBANK_API_TOKEN = MONOBANK_API_TOKEN;
-    this.redis = redis;
+export class MonobankClient extends BankClient {
+  constructor(
+    MONOBANK_API_TOKEN: string,
+    MONOBANK_API_URL: string,
+    redis: RedisClient
+  ) {
+    super(MONOBANK_API_TOKEN, MONOBANK_API_URL, redis);
   }
 
   get accountsUrl() {
-    return `${this.MONOBANK_API_URL}/personal/client-info`;
+    return `${this.BANK_API_URL}/personal/client-info`;
   }
 
   get currencyUrl() {
-    return `${this.MONOBANK_API_URL}/bank/currency`;
+    return `${this.BANK_API_URL}/bank/currency`;
   }
 
   private buildTransactionsUrl(accountId: string, from: number, to: number) {
-    return `${this.MONOBANK_API_URL}/personal/statement/${accountId}/${from}/${to}`;
+    return `${this.BANK_API_URL}/personal/statement/${accountId}/${from}/${to}`;
   }
 
   public async getAccountsWithForeignCurrencies() {
@@ -48,7 +46,7 @@ export class MonobankClient {
     try {
       const response = await fetch(`${this.accountsUrl}`, {
         method: "GET",
-        headers: { "X-Token": this.MONOBANK_API_TOKEN },
+        headers: { "X-Token": this.BANK_API_TOKEN },
       });
       const data = (await response.json()) as PersonalInfo;
 
@@ -95,7 +93,7 @@ export class MonobankClient {
 
     try {
       const res = await fetch(url, {
-        headers: { "X-Token": this.MONOBANK_API_TOKEN },
+        headers: { "X-Token": this.BANK_API_TOKEN },
       });
 
       const data = await res.json();
@@ -133,7 +131,14 @@ export class MonobankClient {
     }
   }
 
-  public async getIncomeByPeriod(accounts: Account[], monthsBack: number) {
+  public async getIncomeByPeriod(period: Period) {
+    const accounts = await this.getAccountsWithForeignCurrencies();
+
+    if (!accounts) {
+      console.error("No accounts found");
+      return [];
+    }
+
     const fopAccounts = this.getFopAccounts(accounts);
 
     const accountsToUse = fopAccounts.filter(
@@ -144,7 +149,7 @@ export class MonobankClient {
     // Use the start of the current day (midnight UTC) for 'now' to improve cache effectiveness
     const now = Math.floor(Date.now() / 1000);
     const dayStart = now - (now % (24 * 60 * 60)); // midnight UTC today
-    const fromTime = dayStart - monthsBack * 30 * 24 * 60 * 60; // ~N months, aligned to day start
+    const fromTime = dayStart - period * 30 * 24 * 60 * 60; // ~N months, aligned to day start
     const maxRange = 2682000; // 31 day + 1 hour
 
     for (const account of accountsToUse) {
@@ -174,7 +179,7 @@ export class MonobankClient {
 
           if (!txns) {
             console.log("No transactions found");
-            return;
+            return [];
           }
 
           const transactionsInUAH = txns
@@ -249,3 +254,13 @@ export class MonobankClient {
     return currencyRate;
   }
 }
+
+if (!MONOBANK_API_TOKEN) {
+  throw new Error("MONOBANK_API_TOKEN is not defined");
+}
+
+export const monobankClient = new MonobankClient(
+  MONOBANK_API_TOKEN,
+  MONOBANK_API_URL,
+  redisClient
+);

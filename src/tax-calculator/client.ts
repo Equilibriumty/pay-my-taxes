@@ -1,6 +1,6 @@
-import type { MonobankClient } from "../monobank/client";
-import type { Transaction, CurrencyCode } from "../monobank/types";
+import type { MonobankClient } from "../bank/monobank/client";
 import type { RedisClient } from "../redis/client";
+import type { Months, Period } from "../shared/types";
 import { CURRENCY_DENOMINATOR } from "./const";
 import type {
   IncomeAndTaxesCalculationResult,
@@ -29,23 +29,14 @@ export class TaxCalculatorClient {
     return totalIncome / this.currencyDenominator;
   }
 
-  public async calculateIncomeByPeriod(monthsBack: number) {
-    const cacheKey = `taxcalc:incomeByPeriod:${monthsBack}`;
+  public async calculateIncomeByPeriod(period: Period) {
+    const cacheKey = `taxcalc:incomeByPeriod:${period}`;
     const cached = await this.redis.get<number>(cacheKey);
     if (cached) {
       return cached;
     }
-    const accounts =
-      await this.monobankClient.getAccountsWithForeignCurrencies();
 
-    if (!accounts) {
-      throw new Error("Accounts not found");
-    }
-
-    const incomes = await this.monobankClient.getIncomeByPeriod(
-      accounts,
-      monthsBack
-    );
+    const incomes = await this.monobankClient.getIncomeByPeriod(period);
 
     if (!incomes) {
       throw new Error("Income not found");
@@ -56,7 +47,7 @@ export class TaxCalculatorClient {
     return result;
   }
 
-  public async calculateTaxesForLastMonths(monthsBack: number) {
+  public async calculateTaxesForLastMonths(monthsBack: Months) {
     const cacheKey = `taxcalc:taxesForLastMonths:${monthsBack}`;
     const cached = await this.redis.get<IncomeAndTaxesCalculationResult>(
       cacheKey

@@ -26,5 +26,6 @@ This project was created using `bun init` in bun v1.2.21. [Bun](https://bun.com)
 
 - [X] Add caching via Redis
 - [x] Refactor Redis into its own service
+- [] Add unit tests
 - [] Think about how to implement correct calculation by using historical currency rates
 - [] Add ability to create invoices to pay the taxes
