@@ -1,6 +1,6 @@
-import type { MonobankClient } from "../bank/monobank/client";
+import type { BankClient } from "../bank/client";
 import type { RedisClient } from "../redis/client";
-import type { Months, Period } from "../shared/types";
+import type { Period } from "../shared/types";
 import { CURRENCY_DENOMINATOR } from "./const";
 import type {
   IncomeAndTaxesCalculationResult,
@@ -8,17 +8,17 @@ import type {
 } from "./types";
 
 export class TaxCalculatorClient {
-  private readonly monobankClient: MonobankClient;
+  private readonly bankClient: BankClient;
   private readonly taxRates: TaxCalculatorClientConfig;
   private readonly currencyDenominator = CURRENCY_DENOMINATOR;
   private readonly redis: RedisClient;
 
   constructor(
-    monobankClient: MonobankClient,
+    bankClient: BankClient,
     taxRates: TaxCalculatorClientConfig,
     redis: RedisClient
   ) {
-    this.monobankClient = monobankClient;
+    this.bankClient = bankClient;
     this.taxRates = taxRates;
     this.redis = redis;
   }
@@ -29,37 +29,28 @@ export class TaxCalculatorClient {
     return totalIncome / this.currencyDenominator;
   }
 
-  public async calculateIncomeByPeriod(period: Period) {
+  public async calculateIncomeByPeriod(
+    period: Period
+  ): Promise<IncomeAndTaxesCalculationResult> {
     const cacheKey = `taxcalc:incomeByPeriod:${period}`;
-    const cached = await this.redis.get<number>(cacheKey);
+    const cached = await this.redis.get<IncomeAndTaxesCalculationResult>(
+      cacheKey
+    );
+
     if (cached) {
       return cached;
     }
 
-    const incomes = await this.monobankClient.getIncomeByPeriod(period);
+    const incomes = await this.bankClient.getIncomeByPeriod(period);
 
     if (!incomes) {
       throw new Error("Income not found");
     }
 
-    const result = this.calculateIncome(incomes);
-    await this.redis.set(cacheKey, result);
-    return result;
-  }
+    const incomeInCurrency = this.calculateIncome(incomes);
+    const taxes = this.calculateTaxes(incomeInCurrency);
+    const result = { income: incomeInCurrency, taxes };
 
-  public async calculateTaxesForLastMonths(monthsBack: Months) {
-    const cacheKey = `taxcalc:taxesForLastMonths:${monthsBack}`;
-    const cached = await this.redis.get<IncomeAndTaxesCalculationResult>(
-      cacheKey
-    );
-    if (cached) {
-      return cached;
-    }
-    const incomeInFromCurrency = await this.calculateIncomeByPeriod(monthsBack);
-
-    const taxes = this.calculateTaxes(incomeInFromCurrency);
-
-    const result = { income: incomeInFromCurrency, taxes };
     await this.redis.set(cacheKey, result);
     return result;
   }

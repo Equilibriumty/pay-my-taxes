@@ -26,8 +26,9 @@ const taxCalculatorClient = new TaxCalculatorClient(
 
 async function main() {
   await redisClient.connect();
-  const { income, taxes } =
-    await taxCalculatorClient.calculateTaxesForLastMonths(PERIOD_IN_MONTHS);
+  const { income, taxes } = await taxCalculatorClient.calculateIncomeByPeriod(
+    PERIOD_IN_MONTHS
+  );
 
   console.log(
     `За останні ${PERIOD_IN_MONTHS} міс. дохід: ${income} ${
