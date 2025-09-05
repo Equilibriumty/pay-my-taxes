@@ -4,9 +4,10 @@ export type TaxCalculatorClientConfig = {
 };
 
 export type IncomeAndTaxesCalculationResult = {
-  income: number;
+  totalIncome: number;
   taxes: {
     general: number;
     military: number;
+    total: number;
   };
 };

@@ -18,31 +18,34 @@ export const PERIOD_IN_MONTHS = Number(
   process.env.PERIOD_IN_MONTHS || "3"
 ) as Months; // Defaults to a regular tax quarter - 3 months;
 
+const bankClients = new Set([monobankClient]);
+
 const taxCalculatorClient = new TaxCalculatorClient(
-  monobankClient,
+  bankClients,
   TAX_RATES,
   redisClient
 );
 
 async function main() {
   await redisClient.connect();
-  const { income, taxes } = await taxCalculatorClient.calculateIncomeByPeriod(
-    PERIOD_IN_MONTHS
-  );
-
-  console.log(
-    `За останні ${PERIOD_IN_MONTHS} міс. дохід: ${income} ${
-      CURRENCY_CODES_TO_SYMBOLS[CURRENCY_SYMBOLS_TO_CODES.UAH]
-    }`
-  );
+  const { totalIncome, taxes } =
+    await taxCalculatorClient.calculateIncomeByPeriod(PERIOD_IN_MONTHS);
 
   const militaryTaxLabel = `Військовий податок ${TAX_RATES.military * 100}%`;
   const generalTaxLabel = `Загальний податок ${TAX_RATES.general * 100}%`;
+  const totalTaxLabel = `Загалом до сплати`;
+
+  console.log(
+    `За останні ${PERIOD_IN_MONTHS} міс. дохід: ${totalIncome} ${
+      CURRENCY_CODES_TO_SYMBOLS[CURRENCY_SYMBOLS_TO_CODES.UAH]
+    }`
+  );
 
   console.table([
     {
       [militaryTaxLabel]: taxes.military,
       [generalTaxLabel]: taxes.general,
+      [totalTaxLabel]: taxes.total,
     },
   ]);
   redisClient.close();

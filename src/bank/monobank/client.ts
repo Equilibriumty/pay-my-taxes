@@ -18,11 +18,12 @@ import { redisClient, RedisClient } from "../../redis/client";
 
 export class MonobankClient extends BankClient {
   constructor(
+    bankId: string,
     MONOBANK_API_TOKEN: string,
     MONOBANK_API_URL: string,
     redis: RedisClient
   ) {
-    super(MONOBANK_API_TOKEN, MONOBANK_API_URL, redis);
+    super(bankId, MONOBANK_API_TOKEN, MONOBANK_API_URL, redis);
   }
 
   get accountsUrl() {
@@ -260,6 +261,7 @@ if (!MONOBANK_API_TOKEN) {
 }
 
 export const monobankClient = new MonobankClient(
+  "monobank",
   MONOBANK_API_TOKEN,
   MONOBANK_API_URL,
   redisClient
