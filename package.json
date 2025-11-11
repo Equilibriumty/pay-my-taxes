@@ -10,6 +10,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "dotenv": "^17.2.1"
+    "dotenv": "^17.2.1",
+    "neverthrow": "^8.2.0"
   }
 }

@@ -28,9 +28,16 @@ const taxCalculatorClient = new TaxCalculatorClient(
 
 async function main() {
   await redisClient.connect();
-  const { totalIncome, taxes } =
-    await taxCalculatorClient.calculateIncomeByPeriod(PERIOD_IN_MONTHS);
+  const result = await taxCalculatorClient.calculateIncomeByPeriod(
+    PERIOD_IN_MONTHS
+  );
 
+  if (result.isErr()) {
+    console.error("Error calculating income", result.error);
+    return;
+  }
+
+  const { totalIncome, taxes } = result.value;
   const militaryTaxLabel = `Військовий податок ${TAX_RATES.military * 100}%`;
   const generalTaxLabel = `Загальний податок ${TAX_RATES.general * 100}%`;
   const totalTaxLabel = `Загалом до сплати`;

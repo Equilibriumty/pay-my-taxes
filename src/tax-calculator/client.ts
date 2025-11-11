@@ -1,3 +1,4 @@
+import { err, Ok, ok, ResultAsync, type Result } from "neverthrow";
 import type { BankClient } from "../bank/client";
 import type { RedisClient } from "../redis/client";
 import type { Period } from "../shared/types";
@@ -6,6 +7,12 @@ import type {
   IncomeAndTaxesCalculationResult,
   TaxCalculatorClientConfig,
 } from "./types";
+
+export enum TaxCalculatorClientErrors {
+  FAILED_TO_FETCH_INCOME = "FAILED_TO_FETCH_INCOME",
+  TAXES_NOT_FOUND = "TAXES_NOT_FOUND",
+  TAXES_NOT_CALCULATED = "TAXES_NOT_CALCULATED",
+}
 
 export class TaxCalculatorClient {
   private readonly bankClients: Set<BankClient>;
@@ -23,15 +30,17 @@ export class TaxCalculatorClient {
     this.redis = redis;
   }
 
-  private calculateIncome(incomes: number[]) {
+  private calculateIncome(incomes: number[]): Ok<number, never> {
     const totalIncome = incomes.reduce((acc, income) => acc + income, 0);
 
-    return totalIncome / this.currencyDenominator;
+    return ok(totalIncome / this.currencyDenominator);
   }
 
   public async calculateIncomeByPeriod(
     period: Period
-  ): Promise<IncomeAndTaxesCalculationResult> {
+  ): Promise<
+    Result<IncomeAndTaxesCalculationResult, TaxCalculatorClientErrors>
+  > {
     const totalIncomeAndTaxesCalculationResult: IncomeAndTaxesCalculationResult =
       {
         totalIncome: 0,
@@ -50,41 +59,48 @@ export class TaxCalculatorClient {
         cacheKey
       );
 
-      if (cached) {
-        totalIncomeAndTaxesCalculationResult.totalIncome += cached.totalIncome;
+      if (cached.isOk() && cached.value !== null) {
+        totalIncomeAndTaxesCalculationResult.totalIncome +=
+          cached.value.totalIncome;
         totalIncomeAndTaxesCalculationResult.taxes.general +=
-          cached.taxes.general;
+          cached.value.taxes.general;
         totalIncomeAndTaxesCalculationResult.taxes.military +=
-          cached.taxes.military;
-        totalIncomeAndTaxesCalculationResult.taxes.total += cached.taxes.total;
+          cached.value.taxes.military;
+        totalIncomeAndTaxesCalculationResult.taxes.total +=
+          cached.value.taxes.total;
         continue;
       }
 
       const incomes = await bankClient.getIncomeByPeriod(period);
 
-      if (!incomes) {
-        throw new Error("Income not found");
+      if (incomes.isErr()) {
+        console.error("Error fetching income", incomes.error);
+        return err(TaxCalculatorClientErrors.FAILED_TO_FETCH_INCOME);
       }
 
-      const incomeInCurrency = this.calculateIncome(incomes);
-      const taxes = this.calculateTaxes(incomeInCurrency);
-      const result = { income: incomeInCurrency, taxes };
+      const incomeInCurrency = this.calculateIncome(incomes.value);
+      const taxes = this.calculateTaxes(incomeInCurrency.value);
+      const result = { income: incomeInCurrency.value, taxes: taxes.value };
 
       await this.redis.set(cacheKey, result);
-      totalIncomeAndTaxesCalculationResult.totalIncome += incomeInCurrency;
-      totalIncomeAndTaxesCalculationResult.taxes.general += taxes.general;
-      totalIncomeAndTaxesCalculationResult.taxes.military += taxes.military;
-      totalIncomeAndTaxesCalculationResult.taxes.total += taxes.total;
+      totalIncomeAndTaxesCalculationResult.totalIncome +=
+        incomeInCurrency.value;
+      totalIncomeAndTaxesCalculationResult.taxes.general += taxes.value.general;
+      totalIncomeAndTaxesCalculationResult.taxes.military +=
+        taxes.value.military;
+      totalIncomeAndTaxesCalculationResult.taxes.total += taxes.value.total;
     }
 
-    return totalIncomeAndTaxesCalculationResult;
+    return ok(totalIncomeAndTaxesCalculationResult);
   }
 
-  public calculateTaxes(income: number) {
-    return {
+  public calculateTaxes(
+    income: number
+  ): Ok<IncomeAndTaxesCalculationResult["taxes"], never> {
+    return ok({
       general: income * this.taxRates.general,
       military: income * this.taxRates.military,
       total: income * (this.taxRates.general + this.taxRates.military),
-    };
+    });
   }
 }
