@@ -1,7 +1,7 @@
 import type { BrandedNumber } from "../shared/types";
 import type { Months, Years, Weeks, Days } from "../shared/types";
 
-function brand<T>(value: number): BrandedNumber<T> {
+export function brand<T>(value: number): BrandedNumber<T> {
   return value as BrandedNumber<T>;
 }
 

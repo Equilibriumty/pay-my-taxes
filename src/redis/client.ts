@@ -33,7 +33,12 @@ export class RedisClient {
       if (!cachedData) {
         return okAsync(null);
       }
-      return okAsync(JSON.parse(cachedData) as T);
+      try {
+        return okAsync(JSON.parse(cachedData) as T);
+      } catch {
+        // If JSON parsing fails, return the raw string
+        return okAsync(cachedData as T);
+      }
     });
     return cachedData;
   }

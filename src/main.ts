@@ -37,6 +37,11 @@ async function main() {
     return;
   }
 
+  if (result.value === null) {
+    console.error("No income calculated");
+    return;
+  }
+
   const { totalIncome, taxes } = result.value;
   const militaryTaxLabel = `Військовий податок ${TAX_RATES.military * 100}%`;
   const generalTaxLabel = `Загальний податок ${TAX_RATES.general * 100}%`;

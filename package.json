@@ -9,6 +9,9 @@
   },
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "dotenv": "^17.2.1",
     "neverthrow": "^8.2.0"

@@ -1,9 +1,9 @@
 import type { Result, ResultAsync } from "neverthrow";
-import type { RedisClient } from "../redis/client";
+import type { RedisClient, RedisClientErrors } from "../redis/client";
 import type { Period } from "../shared/types";
 
 interface IBankClient {
-  getIncomeByPeriod(period: Period): Promise<Result<number[], string>>;
+  getIncomeByPeriod(period: Period): ResultAsync<number[], string | RedisClientErrors>;
 }
 
 export abstract class BankClient implements IBankClient {
@@ -26,5 +26,5 @@ export abstract class BankClient implements IBankClient {
 
   public abstract getIncomeByPeriod(
     period: Period
-  ): Promise<Result<number[], string>>;
+  ): ResultAsync<number[], string | RedisClientErrors>;
 }
